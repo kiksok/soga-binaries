@@ -1,42 +1,35 @@
 # Soga 二进制发行包
 
-Linux amd64 · Xiaov2board WebAPI · VLESS / AnyTLS · 本地签名许可证
+Linux amd64 · Xiaov2board · 2.17.0-local2 · 默认 AnyTLS
 
-本仓库提供运行二进制、部署脚本和使用文档。核心源码不在此仓库中；二进制从 [Releases](https://github.com/kiksok/soga-binaries/releases/tag/v2.17.0-local1) 下载。当前核心版本：`2.17.0-local1`；安装器：`r2`（自动证书）。
+安装器默认使用 `anytls`，不询问协议。需要 VLESS 时传入 `--protocol vless`。
 
-- [详细 Xiaov2board 对接文档](docs/XIAOV2BOARD.md)：面板每项怎么填、TLS / WS / AnyTLS 示例、服务管理及排错。
-- [部署脚本](install.sh)：下载固定版本、校验摘要、生成配置、检查本地许可证、安装依赖和 systemd 服务，支持自动签发与续期证书。
-- [示例配置](examples/)：修改示例值后使用。
+本版使用本地启用文本，填写任意非空内容即可，例如 `local`、`123` 或中文。无需 `license.json`、签名、机器绑定或到期检查。本地文本不传给原版核心，原版授权 HTTP 发送流程继续停用。正常面板接口、流量和在线上报、代理出站及证书签发仍按业务需要联网。
 
-## 快速开始
+- [下载二进制](https://github.com/kiksok/soga-binaries/releases/tag/v2.17.0-local2)
+- [详细 Xiaov2board 对接文档](docs/XIAOV2BOARD.md)
+- [安装脚本](install.sh)
 
-需要 Linux x86_64、Bash、curl、systemd 和 root。正式安装会通过 apt-get/dnf/yum 按需安装 Python 3、OpenSSL、coreutils、tar、socat 等依赖；已有依赖可用 `--skip-deps` 跳过。有效许可证须单独取得，不在公开包中；当前程序只信任固定签发公钥，不能自行换一把钥匙后直接使用。
+## 安装
+
+Linux x86_64 服务器上，以 root 执行：
 
 ```bash
 mkdir -p /project
 cd /project
-curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local1-r2/install.sh -o install.sh
-sudo bash install.sh --license /project/licenses/license.json
+bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.17.0-local2/install.sh)
 ```
 
-按提示填写：协议、面板根地址、该协议的节点ID、后端通讯密钥。证书方式可选 `http`（自动签发，TCP 80须空闲且公网可达）、`dns`（自动签发，需要DNS API凭据）、`file`（已有证书）；VLESS明文/Reality可选 `none`。自动签发还需域名和联系邮箱；签发失败不会启动节点。默认文件目录为 `/project/服务名`。默认安装为独立的 `soga-217-local1` 服务，已有节点目录会被拒绝覆盖。升级用户先按[保留旧版的升级步骤](docs/XIAOV2BOARD.md#71-从2164升级并保留回退)安装，避免新旧服务同时占用端口。
+填写面板根网址、AnyTLS 节点 ID、本地启用文本、真实后端通讯密钥及证书方式。**面板通讯密钥必须是 Xiaov2board 实际的 `server_token`，只有本地启用文本可任意填写。** 用 `--auth-code local` 可预先指定启用文本。
 
-自动模式使用固定版本 acme.sh 3.1.6 与 Let’s Encrypt，安装独立的每日 systemd 续期 timer；续期成功后自动部署证书并重启对应实例。仅在 Xiaov2board 填写 SNI 不会完成域名验证。自动流程的准备、真实工具安装、签发/续期调用和失败路径已检查；公网CA签发需要在目标域名上完成实际验收。
+证书方式可选 `http` 自动签发（域名指向本机，TCP 80 空闲且公网可达）、`dns` 自动签发（需要 DNS API 凭据）、`file` 已有证书。AnyTLS 必须使用证书，VLESS 明文或 Reality 可选 `none`。自动模式使用固定校验的 acme.sh 3.1.6 与 Let’s Encrypt，systemd 每日检查续期，证书更新成功后校验并重启对应实例。公网 CA 签发须完成实际域名验证。
 
-没有许可证时可先取得目标机器指纹，不安装服务：
+默认目录为 `/project/soga-217-local2`，服务名为 `soga-217-local2`。脚本按需安装依赖，不覆盖已有目录或服务。`--prepare-only` 只生成文件并检查；`--no-start` 安装服务定义但暂缓签发和启动。
 
-```bash
-bash install.sh --fingerprint
-```
+## 包内容与升级
 
-## 下载文件
+ZIP 内只有 `soga-offline`、`soga.core`、`soga.conf`、`README.md`、`SHA256SUMS`。仓库只发布二进制、脚本、示例和使用文档，不包含核心源码、内部分析资料、签发私钥或机器绑定信息。
 
-发行包 `soga-local1-2.17.0-linux-amd64.zip` 内只有三个二进制、示例配置、说明和校验文件。SHA-256：
+旧版 2.17.0-local1 保留用于回退。升级使用新目录和服务名，不需要转换或签发许可证。先停止占用同一端口的旧服务，再启动新版，按文档验证客户端、用户增删及面板上报。
 
-```text
-d355f7c9ac52818704ca3a3c57391c113d01bd333737c7613713eea6e617274b
-```
-
-公开发布内容不含部署许可证、签发私钥、机器指纹、个人目录、核心源码或内部分析资料。可执行文件保留运行所需的内嵌数据和正常 Go 编译元数据。
-
-本版本为测试发行，实际面板、证书及复杂传输模式需按部署环境验收。授权校验使用本地签名；面板读取、流量/在线数据上报和代理出站仍正常联网。本发行支持传统 VLESS / AnyTLS 节点，启动器拒绝非空 `sub_type`，暂不支持 v2node 节点。
+本版支持传统 Xiaov2board AnyTLS/VLESS，暂不支持非空 `sub_type` 或 v2node。程序仍检查二进制版本完整性，面板用户权限、流量和设备等业务限制仍正常执行。

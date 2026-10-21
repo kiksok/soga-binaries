@@ -3,14 +3,14 @@ set -Eeuo pipefail
 set +x
 umask 077
 
-readonly VERSION='2.17.0-local1'
-readonly INSTALLER_REVISION='2'
-readonly ARCHIVE_NAME='soga-local1-2.17.0-linux-amd64.zip'
+readonly VERSION='2.17.0-local2'
+readonly INSTALLER_REVISION='3'
+readonly ARCHIVE_NAME='soga-local2-2.17.0-linux-amd64.zip'
 readonly ARCHIVE_URL="https://github.com/kiksok/soga-binaries/releases/download/v${VERSION}/${ARCHIVE_NAME}"
-readonly ARCHIVE_SHA256='d355f7c9ac52818704ca3a3c57391c113d01bd333737c7613713eea6e617274b'
-protocol='' sub_type='' panel_url='' node_ids='' license_file='' token_file='' cert_file='' key_file=''
-listen_address='0.0.0.0' service_name='soga-217-local1' destination='' archive_file=''
-prepare_only=0 no_start=0 check_panel=0 fingerprint_only=0 interactive=0 work=''
+readonly ARCHIVE_SHA256='48c94ecd32b02dc3d7ea8b62a8d706aa8786e23962fff9bc9ac38771ddd33611'
+protocol='anytls' sub_type='' panel_url='' node_ids='' auth_code='' token_file='' cert_file='' key_file=''
+listen_address='0.0.0.0' service_name='soga-217-local2' destination='' archive_file=''
+prepare_only=0 no_start=0 check_panel=0 interactive=0 work=''
 cert_mode='' cert_domain='' cert_email='' dns_provider='' dns_env_file='' acme_archive=''
 skip_deps=0
 
@@ -20,11 +20,11 @@ trap cleanup EXIT
 trap 'printf "操作失败，请检查上方错误；已有部署不会被覆盖；新建目录可能已保留，请按错误提示处理。\n" >&2' ERR
 usage() {
   cat <<'USAGE'
-Soga 2.17.0 local-1 / Xiaov2board 对接安装器 r2（Linux x86_64）
+Soga 2.17.0 local-2 / Xiaov2board 对接安装器 r3（Linux x86_64）
 
 用法：bash install.sh [选项]
-  --license FILE       单独提供的有效 license.json
-  --protocol TYPE      vless 或 anytls
+  --auth-code TEXT     本地授权码，任意非空文本（例如 local），不联网验码
+  --protocol TYPE      默认 anytls，不再询问；需要VLESS时填写 --protocol vless
   --sub-type TYPE      预留参数；本发行安装器尚未启用 v2node，填写会报错
   --panel-url URL      面板根地址，如 https://panel.example.com/
   --node-id IDS        对应协议节点ID；同协议多节点用逗号分隔
@@ -39,16 +39,15 @@ Soga 2.17.0 local-1 / Xiaov2board 对接安装器 r2（Linux x86_64）
   --cert FILE          手动TLS证书的绝对路径（fullchain）
   --key FILE           对应私钥的绝对路径
   --listen ADDRESS     监听IP，默认 0.0.0.0
-  --name NAME          服务名称，默认 soga-217-local1；只允许小写字母数字和短横线
+  --name NAME          服务名称，默认 soga-217-local2；只允许小写字母数字和短横线
   --dest DIRECTORY     安装目录，默认 /project/服务名称；必须是不存在的绝对路径
   --archive FILE       使用已下载的固定版本ZIP，仍核对内置SHA-256
   --check-panel        额外读取面板config/user接口，仅输出摘要
   --no-start           安装文件与服务定义，但不启用或启动服务
   --prepare-only       只准备目录并做本地检查；不要求root、不改systemd、不启动
-  --fingerprint        下载/校验程序后仅打印本机指纹，不安装、不要求许可证
   -h, --help           显示帮助
 
-缺少的必要信息会从终端交互读取。公开下载包不含许可证和签发私钥。
+缺少的必要信息从终端交互读取。本版不需要许可证文件、签名、机器指纹或有效期。
 正式安装会按需安装依赖；http/dns模式使用acme.sh及systemd定时续期。
 --prepare-only / --no-start不签发证书；不修改防火墙或覆盖已有部署。
 USAGE
@@ -56,7 +55,7 @@ USAGE
 value() { [[ $# -ge 2 && -n "$2" ]] || die "$1 需要一个值"; }
 while (($#)); do
   case "$1" in
-    --license) value "$@"; license_file=$2; shift 2;;
+    --auth-code) value "$@"; auth_code=$2; shift 2;;
     --protocol) value "$@"; protocol=$2; shift 2;;
     --sub-type) value "$@"; sub_type=$2; shift 2;;
     --panel-url) value "$@"; panel_url=$2; shift 2;;
@@ -78,7 +77,6 @@ while (($#)); do
     --prepare-only) prepare_only=1; shift;;
     --no-start) no_start=1; shift;;
     --check-panel) check_panel=1; shift;;
-    --fingerprint) fingerprint_only=1; shift;;
     -h|--help) usage; exit 0;;
     *) die "未知参数 $1（使用 --help 查看）";;
   esac
@@ -104,7 +102,7 @@ install_base() {
     die '未找到apt-get/dnf/yum，请自行安装依赖并使用 --skip-deps'
   fi
 }
-if ((!prepare_only && !fingerprint_only && !skip_deps)); then install_base; fi
+if ((!prepare_only && !skip_deps)); then install_base; fi
 for tool in python3 sha256sum mktemp install; do command -v "$tool" >/dev/null || die "缺少依赖：$tool"; done
 work=$(mktemp -d -t soga-install.XXXXXXXX)
 
@@ -121,7 +119,7 @@ printf '%s  %s\n' "$ARCHIVE_SHA256" "$work/package.zip" | sha256sum --check --st
 python3 - "$work/package.zip" "$work/bundle" <<'PY'
 import hashlib, pathlib, sys, zipfile
 archive, dest = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-names = {'README.md', 'SHA256SUMS', 'soga-license', 'soga-offline', 'soga.conf', 'soga.core'}
+names = {'README.md', 'SHA256SUMS', 'soga-offline', 'soga.conf', 'soga.core'}
 with zipfile.ZipFile(archive) as z:
     if set(z.namelist()) != names or len(z.namelist()) != len(names):
         raise SystemExit('ZIP文件清单不符合固定版本')
@@ -144,8 +142,7 @@ with zipfile.ZipFile(archive) as z:
     if seen != expected_names:
         raise SystemExit('文件校验清单不完整')
 PY
-chmod 755 "$work/bundle/soga-offline" "$work/bundle/soga-license" "$work/bundle/soga.core"
-if ((fingerprint_only)); then "$work/bundle/soga-offline" --fingerprint; exit 0; fi
+chmod 755 "$work/bundle/soga-offline" "$work/bundle/soga.core"
 
 ask() {
   local variable=$1 prompt=$2 input
@@ -154,17 +151,15 @@ ask() {
   read -r -p "$prompt" input </dev/tty || die '输入中断'
   printf -v "$variable" '%s' "$input"
 }
-[[ -n "$protocol" ]] || ask protocol '协议（vless / anytls）：'
 [[ -n "$panel_url" ]] || ask panel_url '面板根地址（如 https://panel.example.com/）：'
 [[ -n "$node_ids" ]] || ask node_ids '该协议节点ID（多节点用逗号分隔）：'
-[[ -n "$license_file" ]] || ask license_file '本机有效许可证文件路径：'
+[[ -n "$auth_code" ]] || ask auth_code '本地授权码（任意非空文本，例如 local）：'
 [[ "$protocol" == vless || "$protocol" == anytls ]] || die '协议必须是 vless 或 anytls'
 [[ "$service_name" =~ ^[a-z][a-z0-9-]{0,39}$ ]] || die '服务名不合法'
 destination=${destination:-/project/$service_name}
 [[ "$destination" =~ ^/[A-Za-z0-9._/-]+$ && "$destination" != *'/../'* && "$destination" != */.. ]] || die '安装目录须为不含空格或父目录跳转的绝对路径'
 case "$destination" in /|/opt|/etc|/usr|/usr/bin|/bin|/sbin|/tmp|/var) die '请指定专用子目录';; esac
 [[ ! -e "$destination" && ! -L "$destination" ]] || die '安装目录已存在；为避免覆盖，改用新目录或按文档更新'
-[[ -f "$license_file" && -r "$license_file" ]] || die '许可证文件不可读'
 if [[ -z "$token_file" ]]; then
   interactive=1
   [[ -r /dev/tty ]] || die '非交互执行必须提供 --token-file'
@@ -251,11 +246,11 @@ if [[ -n "$acme_archive" ]]; then
   printf '%s  %s\n' '0d3f9000ac44a6331314742a88c475f79134e24fc991997883652adc59efc486' "$acme_archive" | sha256sum --check --status || die 'acme.sh源码包摘要不匹配'
 fi
 
-python3 - "$work/bundle/soga.conf" "$panel_url" "$node_ids" "$token_file" "$protocol" "$listen_address" "$cert_file" "$key_file" <<'PY'
+python3 - "$work/bundle/soga.conf" "$panel_url" "$node_ids" "$token_file" "$protocol" "$listen_address" "$cert_file" "$key_file" "$auth_code" <<'PY'
 import ipaddress, pathlib, re, sys, urllib.parse
-target, url, ids, token_file, protocol, listen, cert, key = sys.argv[1:]
+target, url, ids, token_file, protocol, listen, cert, key, auth_code = sys.argv[1:]
 token = pathlib.Path(token_file).read_text().strip()
-for value in (url, ids, token, protocol, listen, cert, key):
+for value in (url, ids, token, protocol, listen, cert, key, auth_code):
     if '\n' in value or '\r' in value or '\x00' in value:
         raise SystemExit('输入不能包含换行或NUL')
 u = urllib.parse.urlsplit(url)
@@ -273,7 +268,9 @@ if not parts or any(not re.fullmatch(r'[1-9][0-9]*', x) or int(x) > 922337203685
     raise SystemExit('节点ID必须为不重复的正整数，多个节点用逗号分隔且不加空格')
 if not token or len(token) > 8192:
     raise SystemExit('通讯密钥为空或过长')
-text = f'type=xiaov2board\nserver_type={protocol}\napi=webapi\nnode_id={ids}\nwebapi_url={url.rstrip("/")}/\nwebapi_key={token}\nlisten={listen}\ncheck_interval=60\nsubmit_interval=60\ntcp_timeout=120\nudp_timeout=2\nforbidden_bit_torrent=false\n'
+if not auth_code.strip() or len(auth_code.encode()) > 8192:
+    raise SystemExit('本地授权码须为非空文本，最多8192字节')
+text = f'type=xiaov2board\nserver_type={protocol}\napi=webapi\nnode_id={ids}\nwebapi_url={url.rstrip("/")}/\nwebapi_key={token}\nsoga_key={auth_code}\nlisten={listen}\ncheck_interval=60\nsubmit_interval=60\ntcp_timeout=120\nudp_timeout=2\nforbidden_bit_torrent=false\n'
 if cert:
     text += f'cert_mode=file\ncert_file={cert}\nkey_file={key}\n'
 pathlib.Path(target).write_text(text)
@@ -384,8 +381,7 @@ CERT_SCRIPT
   } >"$work/bundle/certificate-reload.sh"
   chmod 700 "$work/bundle/certificate-reload.sh"
 fi
-install -m 600 "$license_file" "$work/bundle/license.json"
-printf '校验本地许可证、机器和配置…\n'
+printf '检查本地启用状态、程序完整性和配置…\n'
 "$work/bundle/soga-offline" --check --config "$work/bundle/soga.conf"
 
 if ((check_panel)); then
@@ -429,7 +425,7 @@ mkdir -p -- "$(dirname -- "$destination")"
 mv -T --no-clobber -- "$work/bundle" "$destination"
 [[ ! -d "$work/bundle" ]] || die '安装目录在准备期间已出现；为避免覆盖，未移入文件'
 install -d -m 700 "$destination/tmp"
-(cd "$destination" && sha256sum soga-offline soga-license soga.core > SHA256SUMS)
+(cd "$destination" && sha256sum soga-offline soga.core > SHA256SUMS)
 if ((prepare_only)); then
   printf '文件已准备并通过本地检查：%s\n未修改systemd或启动服务。\n' "$destination"
   if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
@@ -440,7 +436,7 @@ fi
 install -d -m 755 /etc/soga
 cat >"/etc/systemd/system/$service_name.service" <<UNIT
 [Unit]
-Description=Soga 2.17.0 local-1 Xiaov2board backend
+Description=Soga 2.17.0 local-2 Xiaov2board backend
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -451,7 +447,7 @@ Type=simple
 User=root
 WorkingDirectory=$destination
 Environment=TMPDIR=$destination/tmp
-ExecStart=$destination/soga-offline --config $destination/soga.conf --license $destination/license.json --core $destination/soga.core
+ExecStart=$destination/soga-offline --config $destination/soga.conf --core $destination/soga.core
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10
