@@ -1,6 +1,6 @@
 # Xiaov2board 对接使用文档
 
-适用版本：Soga `2.16.4-local2`，Linux amd64。本文对应 Xiaov2board 的 `/api/v1/server/UniProxy` 接口，支持当前启动器允许的 `vless` 和 `anytls` 两种节点类型。
+适用版本：Soga `2.17.0-local1`，Linux amd64。本文的传统节点示例对应 Xiaov2board 的 `/api/v1/server/UniProxy` 接口，使用 `vless` 和 `anytls` 两种节点类型。从2.16.4升级请先阅读[保留旧版的升级步骤](#71-从2164升级并保留回退)。
 
 ## 1. 先准备哪些信息
 
@@ -86,6 +86,14 @@
 
 Reality使用面板 `tls=2`、对应服务端私钥、目标地址/端口、允许SNI和short ID；客户端使用对应公钥。Vision使用TCP及匹配的 `xtls-rprx-vision`。不要把普通TLS的PEM证书、Reality密钥和MLKEM密钥混填。
 
+### 2.5 新版的 sub_type 与 v2node 节点
+
+原版2.17.0增加了用于 Xiaov2board v2node 节点的 `sub_type`。v2node 是面板中独立的节点分类，内部再选择协议；它的节点ID不等于传统VLESS或AnyTLS分类下的同号节点。不要仅因节点实际使用VLESS就把v2node节点ID填进本文的传统VLESS示例。
+
+对应面板实现中，传统节点配置走 `/api/v1/server/UniProxy/config`；v2node配置走 `/api/v2/server/config`，响应包含 `protocol`、`network_settings` 等字段。v2node的配置获取、用户刷新、流量和在线数据上报需要一起核对。原版的新增参数不能代替这些接口的实际验收。
+
+本发行暂不支持v2node节点，启动器拒绝非空 `sub_type`，安装器也会明确拒绝 `--sub-type`。已有传统VLESS、AnyTLS节点升级保持原来的节点类型和ID，不需要添加 `sub_type`。需要迁移节点分类时，先等待明确支持相应接口的发行版，再在独立测试节点验证账户增删、代理、流量和在线数据。
+
 ## 3. 准备许可证与服务器
 
 公开下载包不含部署许可证，也不含签发私钥。许可证可绑定机器、有效期、协议及本地限额；当前程序固定信任已有签发公钥。用另一把自行生成的私钥签名，不会被此程序接受。
@@ -93,7 +101,7 @@ Reality使用面板 `tls=2`、对应服务端私钥、目标地址/端口、允�
 在目标服务器下载脚本并取得机器指纹：
 
 ```bash
-curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.16.4-local2/install.sh -o install.sh
+curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.17.0-local1/install.sh -o install.sh
 bash install.sh --fingerprint
 ```
 
@@ -122,7 +130,7 @@ sudo bash install.sh --license /secure/license.json
 
 依次输入协议、面板根地址、节点ID和后端通讯密钥。密钥输入不回显。AnyTLS会继续询问证书和私钥路径；VLESS也会询问可选证书路径，普通TLS/WSS填写证书和私钥，明文TCP/WS或Reality留空。
 
-默认服务名 `soga-local2`，安装目录 `/opt/soga-local2`。已有同名目录或服务不会被覆盖。脚本会校验固定版本ZIP和解压文件摘要、执行本地 `--check`，通过后安装并启用服务。
+默认服务名 `soga-217-local1`，安装目录 `/opt/soga-217-local1`。已有同名目录或服务不会被覆盖。脚本会校验固定版本ZIP和解压文件摘要、执行本地 `--check`，通过后安装并启用服务。升级时先增加 `--no-start`，按第7.1节手动切换，避免与正在运行的旧版占用相同端口。
 
 ### 4.2 明确参数：VLESS TLS
 
@@ -146,7 +154,7 @@ sudo bash install.sh \
   --token-file ./panel-token.txt \
   --cert /etc/ssl/soga/fullchain.pem \
   --key /etc/ssl/soga/privkey.pem \
-  --name soga-vless \
+  --name soga-217-vless \
   --check-panel
 ```
 
@@ -163,7 +171,7 @@ sudo bash install.sh \
   --token-file ./panel-token.txt \
   --cert /etc/ssl/soga-anytls/fullchain.pem \
   --key /etc/ssl/soga-anytls/privkey.pem \
-  --name soga-anytls \
+  --name soga-217-anytls \
   --check-panel
 ```
 
@@ -173,13 +181,13 @@ sudo bash install.sh \
 
 ```bash
 # 在专用目录准备文件并校验许可证，不修改systemd或启动核心
-bash install.sh --prepare-only --dest /tmp/soga-preview \
+bash install.sh --prepare-only --dest /tmp/soga-217-preview \
   --license /secure/license.json --protocol vless \
   --panel-url https://panel.example.com/ --node-id 37 \
   --token-file ./panel-token.txt
 
 # 已下载ZIP时增加 --archive 参数，仍校验脚本内固定摘要
-sudo bash install.sh --archive ./soga-local2-2.16.4-linux-amd64.zip \
+sudo bash install.sh --archive ./soga-local1-2.17.0-linux-amd64.zip \
   --license /secure/license.json --no-start
 ```
 
@@ -253,22 +261,69 @@ chmod +x soga-offline soga-license soga.core
 
 ## 7. 服务、证书续期和更新
 
-将下面 `soga-vless` 换成实际 `--name`：
+将下面 `soga-217-vless` 换成实际 `--name`；未指定名称的新安装默认是 `soga-217-local1`：
 
 ```bash
-sudo systemctl status soga-vless --no-pager
-sudo journalctl -u soga-vless -n 80 --no-pager
-sudo journalctl -u soga-vless -f
-sudo systemctl restart soga-vless
-sudo systemctl stop soga-vless
-sudo systemctl disable --now soga-vless
+sudo systemctl status soga-217-vless --no-pager
+sudo journalctl -u soga-217-vless -n 80 --no-pager
+sudo journalctl -u soga-217-vless -f
+sudo systemctl restart soga-217-vless
+sudo systemctl stop soga-217-vless
+sudo systemctl disable --now soga-217-vless
 ```
 
 脚本的配置与许可证在 `/opt/服务名/` 下，均按受限权限保存；临时运行文件位于该目录的 `tmp/`。脚本安装后 `SHA256SUMS` 只记录三个不可变二进制，修改配置不影响二进制校验。
 
 证书续期后核对链和私钥路径，并重启相应服务，不假设自动热加载。许可证到期、移除或变为无效时启动器会停止核心；许可证调整或迁机需由对应签发管理员处理。
 
-此安装器拒绝覆盖现有目录。更新前备份配置和许可证、停止服务，核对新版本的许可证兼容性；把新包放进独立版本目录，先本地校验，再修改服务的 `WorkingDirectory/ExecStart/TMPDIR` 并执行 `systemctl daemon-reload`、重启。保留旧目录以便回退，不将新版程序混放进已运行的临时目录。
+### 7.1 从2.16.4升级并保留回退
+
+新版本不自动覆盖旧目录、替换现有服务或升级现有许可证。许可证绑定的程序与清单摘要已变化，需要签发管理员为2.17.0准备对应许可证；保留旧版许可证用于回退。以下以旧服务 `soga-local2`、新服务 `soga-217-local1` 为例，实际名称可通过 `systemctl status` 确认。
+
+1. 保留原安装目录及配置、许可证，另行安全备份。旧版 `license.json` 留在旧安装目录，新版许可证另存为 `/secure/license-2.17.0.json`，不要覆盖旧版许可证。记录旧服务名、节点类型/ID、面板地址、证书路径和实际端口；不要把真实配置提交到公开仓库。
+2. 下载本版安装脚本，使用全新服务名和目录，添加 `--no-start`。与旧版使用同一节点/端口时，此时只准备新版，保持旧版继续服务。
+
+```bash
+curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.17.0-local1/install.sh -o install-2.17.0.sh
+sudo bash install-2.17.0.sh \
+  --license /secure/license-2.17.0.json \
+  --protocol vless \
+  --panel-url https://panel.example.com/ \
+  --node-id 37 \
+  --token-file ./panel-token.txt \
+  --cert /etc/ssl/soga/fullchain.pem \
+  --key /etc/ssl/soga/privkey.pem \
+  --name soga-217-local1 \
+  --dest /opt/soga-217-local1 \
+  --check-panel --no-start
+```
+
+上例是普通VLESS TLS；AnyTLS改为 `--protocol anytls` 及对应节点ID和证书，明文TCP/WS去掉 `--cert` / `--key`。有效的原有证书可继续使用原绝对路径，无需移动到新版安装目录。`panel-token.txt` 按第4.2节准备。安装器的本地检查和面板预检不启动代理监听；它们通过后仍须验证真实客户端。
+
+3. 核对新目录的 `soga.conf`，然后切换。先停旧服务，释放同一端口，再启动新服务：
+
+```bash
+sudo systemctl stop soga-local2
+sudo systemctl start soga-217-local1
+sudo systemctl status soga-217-local1 --no-pager
+sudo journalctl -u soga-217-local1 -n 80 --no-pager
+```
+
+4. 用实际客户端验证代理、用户增删、流量和在线上报。确认成功后再调整开机启动：
+
+```bash
+sudo systemctl enable soga-217-local1
+sudo systemctl disable soga-local2
+```
+
+5. 若启动失败或对接异常，停止新版并启动保留的旧版。回退不需要覆盖文件或重新下载：
+
+```bash
+sudo systemctl disable --now soga-217-local1
+sudo systemctl enable --now soga-local2
+```
+
+保留两套目录，直到新版按实际业务验收完成。不要同时运行同端口的两套服务，不要把新版二进制或许可证复制到旧版运行目录或 `tmp/` 中混用。
 
 ## 8. 常见问题
 

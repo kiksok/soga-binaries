@@ -3,12 +3,12 @@ set -Eeuo pipefail
 set +x
 umask 077
 
-readonly VERSION='2.16.4-local2'
-readonly ARCHIVE_NAME='soga-local2-2.16.4-linux-amd64.zip'
+readonly VERSION='2.17.0-local1'
+readonly ARCHIVE_NAME='soga-local1-2.17.0-linux-amd64.zip'
 readonly ARCHIVE_URL="https://github.com/kiksok/soga-binaries/releases/download/v${VERSION}/${ARCHIVE_NAME}"
-readonly ARCHIVE_SHA256='8f11a8b66f981e215c500dd1e4bae25515ee9fc756b80afbb63f417549cbd2bc'
-protocol='' panel_url='' node_ids='' license_file='' token_file='' cert_file='' key_file=''
-listen_address='0.0.0.0' service_name='soga-local2' destination='' archive_file=''
+readonly ARCHIVE_SHA256='d355f7c9ac52818704ca3a3c57391c113d01bd333737c7613713eea6e617274b'
+protocol='' sub_type='' panel_url='' node_ids='' license_file='' token_file='' cert_file='' key_file=''
+listen_address='0.0.0.0' service_name='soga-217-local1' destination='' archive_file=''
 prepare_only=0 no_start=0 check_panel=0 fingerprint_only=0 interactive=0 work=''
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
@@ -17,18 +17,19 @@ trap cleanup EXIT
 trap 'printf "操作失败，请检查上方错误；已有部署不会被此脚本覆盖。\n" >&2' ERR
 usage() {
   cat <<'USAGE'
-Soga local-2 / Xiaov2board 对接安装器（Linux x86_64）
+Soga 2.17.0 local-1 / Xiaov2board 对接安装器（Linux x86_64）
 
 用法：bash install.sh [选项]
   --license FILE       单独提供的有效 license.json
   --protocol TYPE      vless 或 anytls
+  --sub-type TYPE      预留参数；本发行安装器尚未启用 v2node，填写会报错
   --panel-url URL      面板根地址，如 https://panel.example.com/
   --node-id IDS        对应协议节点ID；同协议多节点用逗号分隔
   --token-file FILE    仅保存后端通讯密钥的文本文件；省略则隐藏输入
   --cert FILE          手动TLS证书的绝对路径（fullchain）
   --key FILE           对应私钥的绝对路径
   --listen ADDRESS     监听IP，默认 0.0.0.0
-  --name NAME          服务名称，默认 soga-local2；只允许小写字母数字和短横线
+  --name NAME          服务名称，默认 soga-217-local1；只允许小写字母数字和短横线
   --dest DIRECTORY     安装目录，默认 /opt/服务名称；必须是不存在的绝对路径
   --archive FILE       使用已下载的固定版本ZIP，仍核对内置SHA-256
   --check-panel        额外读取面板config/user接口，仅输出摘要
@@ -46,6 +47,7 @@ while (($#)); do
   case "$1" in
     --license) value "$@"; license_file=$2; shift 2;;
     --protocol) value "$@"; protocol=$2; shift 2;;
+    --sub-type) value "$@"; sub_type=$2; shift 2;;
     --panel-url) value "$@"; panel_url=$2; shift 2;;
     --node-id) value "$@"; node_ids=$2; shift 2;;
     --token-file) value "$@"; token_file=$2; shift 2;;
@@ -63,6 +65,7 @@ while (($#)); do
     *) die "未知参数 $1（使用 --help 查看）";;
   esac
 done
+[[ -z "$sub_type" ]] || die '此安装器尚未启用 sub_type/v2node；请使用已验收的传统 VLESS/AnyTLS 节点'
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || die '仅支持 Linux x86_64 / amd64'
 for tool in python3 sha256sum mktemp install; do command -v "$tool" >/dev/null || die "缺少依赖：$tool"; done
 work=$(mktemp -d -t soga-install.XXXXXXXX)
@@ -152,7 +155,8 @@ if ((!prepare_only)); then
   [[ $EUID -eq 0 ]] || die '安装systemd服务需要root；仅生成文件请用 --prepare-only --dest 专用目录'
   command -v systemctl >/dev/null || die '缺少 systemctl'
   [[ -d /run/systemd/system ]] || die '系统未运行systemd；请使用 --prepare-only 后手动管理进程'
-  [[ ! -e "/etc/systemd/system/$service_name.service" ]] || die '同名服务文件已存在'
+  [[ ! -e "/etc/systemd/system/$service_name.service" && ! -L "/etc/systemd/system/$service_name.service" ]] || die '同名服务文件已存在'
+  if systemctl cat "$service_name.service" >/dev/null 2>&1; then die '同名systemd服务已存在；请使用全新 --name'; fi
 fi
 
 python3 - "$work/bundle/soga.conf" "$panel_url" "$node_ids" "$token_file" "$protocol" "$listen_address" "$cert_file" "$key_file" <<'PY'
@@ -224,7 +228,8 @@ PY
 fi
 
 mkdir -p -- "$(dirname -- "$destination")"
-mv -- "$work/bundle" "$destination"
+mv -T --no-clobber -- "$work/bundle" "$destination"
+[[ ! -d "$work/bundle" ]] || die '安装目录在准备期间已出现；为避免覆盖，未移入文件'
 install -d -m 700 "$destination/tmp"
 (cd "$destination" && sha256sum soga-offline soga-license soga.core > SHA256SUMS)
 if ((prepare_only)); then
@@ -234,7 +239,7 @@ fi
 install -d -m 755 /etc/soga
 cat >"/etc/systemd/system/$service_name.service" <<UNIT
 [Unit]
-Description=Soga local-2 Xiaov2board backend
+Description=Soga 2.17.0 local-1 Xiaov2board backend
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
