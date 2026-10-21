@@ -4,11 +4,11 @@ set +x
 umask 077
 
 readonly VERSION='2.17.0-local2'
-readonly INSTALLER_REVISION='3'
+readonly INSTALLER_REVISION='4'
 readonly ARCHIVE_NAME='soga-local2-2.17.0-linux-amd64.zip'
 readonly ARCHIVE_URL="https://github.com/kiksok/soga-binaries/releases/download/v${VERSION}/${ARCHIVE_NAME}"
 readonly ARCHIVE_SHA256='48c94ecd32b02dc3d7ea8b62a8d706aa8786e23962fff9bc9ac38771ddd33611'
-protocol='anytls' sub_type='' panel_url='' node_ids='' auth_code='' token_file='' cert_file='' key_file=''
+protocol='anytls' sub_type='' panel_url='' node_ids='' auth_code='local' token_file='' cert_file='' key_file=''
 listen_address='0.0.0.0' service_name='soga-217-local2' destination='' archive_file=''
 prepare_only=0 no_start=0 check_panel=0 interactive=0 work=''
 cert_mode='' cert_domain='' cert_email='' dns_provider='' dns_env_file='' acme_archive=''
@@ -20,18 +20,18 @@ trap cleanup EXIT
 trap 'printf "操作失败，请检查上方错误；已有部署不会被覆盖；新建目录可能已保留，请按错误提示处理。\n" >&2' ERR
 usage() {
   cat <<'USAGE'
-Soga 2.17.0 local-2 / Xiaov2board 对接安装器 r3（Linux x86_64）
+Soga 2.17.0 local-2 / Xiaov2board 对接安装器 r4（Linux x86_64）
 
 用法：bash install.sh [选项]
-  --auth-code TEXT     本地授权码，任意非空文本（例如 local），不联网验码
+  --auth-code TEXT     本地启用文本，默认local，不再询问，不联网验码
   --protocol TYPE      默认 anytls，不再询问；需要VLESS时填写 --protocol vless
   --sub-type TYPE      预留参数；本发行安装器尚未启用 v2node，填写会报错
   --panel-url URL      面板根地址，如 https://panel.example.com/
   --node-id IDS        对应协议节点ID；同协议多节点用逗号分隔
   --token-file FILE    仅保存后端通讯密钥的文本文件；省略则隐藏输入
-  --cert-mode MODE     http / dns / file / none；AnyTLS不能选none
-  --cert-domain DOMAIN 自动证书域名，应与节点SNI一致
-  --cert-email EMAIL   ACME账户联系邮箱（自动证书必填）
+  --cert-mode MODE     默认auto：读取面板SNI并HTTP自动签发；另支持dns/file/none
+  --cert-domain DOMAIN 可选覆盖证书域名，默认读取面板节点SNI
+  --cert-email EMAIL   可选ACME联系邮箱，省略不询问
   --dns-provider NAME  DNS插件，如 dns_cf、dns_ali
   --dns-env FILE       DNS API凭据文件，KEY=value格式，不执行shell展开
   --acme-archive FILE  使用已下载的acme.sh 3.1.6源码包，仍核对固定摘要
@@ -47,7 +47,8 @@ Soga 2.17.0 local-2 / Xiaov2board 对接安装器 r3（Linux x86_64）
   --prepare-only       只准备目录并做本地检查；不要求root、不改systemd、不启动
   -h, --help           显示帮助
 
-缺少的必要信息从终端交互读取。本版不需要许可证文件、签名、机器指纹或有效期。
+默认仅询问面板网址、节点ID和通讯密钥；AnyTLS节点必须在面板填写有效SNI。
+本版不需要许可证文件、签名、机器指纹或有效期。
 正式安装会按需安装依赖；http/dns模式使用acme.sh及systemd定时续期。
 --prepare-only / --no-start不签发证书；不修改防火墙或覆盖已有部署。
 USAGE
@@ -153,7 +154,6 @@ ask() {
 }
 [[ -n "$panel_url" ]] || ask panel_url '面板根地址（如 https://panel.example.com/）：'
 [[ -n "$node_ids" ]] || ask node_ids '该协议节点ID（多节点用逗号分隔）：'
-[[ -n "$auth_code" ]] || ask auth_code '本地授权码（任意非空文本，例如 local）：'
 [[ "$protocol" == vless || "$protocol" == anytls ]] || die '协议必须是 vless 或 anytls'
 [[ "$service_name" =~ ^[a-z][a-z0-9-]{0,39}$ ]] || die '服务名不合法'
 destination=${destination:-/project/$service_name}
@@ -172,16 +172,81 @@ fi
 [[ -f "$token_file" && -r "$token_file" ]] || die '通讯密钥文件不可读'
 if [[ -z "$cert_mode" ]]; then
   if [[ -n "$cert_file" || -n "$key_file" ]]; then cert_mode=file
-  elif [[ "$protocol" == anytls ]] || ((interactive)); then
-    ask cert_mode '证书方式（http自动 / dns自动 / file已有证书 / none无证书；AnyTLS必选证书方式）：'
-  else cert_mode=none; fi
+  else cert_mode=auto; fi
 fi
-case "$cert_mode" in http|dns|file|none) ;; *) die '证书方式必须是 http、dns、file 或 none';; esac
+case "$cert_mode" in auto|http|dns|file|none) ;; *) die '证书方式必须是 auto、http、dns、file 或 none';; esac
+if [[ "$cert_mode" == auto ]] || { [[ "$cert_mode" == http || "$cert_mode" == dns ]] && [[ -z "$cert_domain" ]]; }; then
+  python3 - "$panel_url" "$node_ids" "$token_file" "$protocol" "$cert_mode" "$cert_domain" "$work/certificate-detection.json" <<'PANEL_CERT'
+import json, pathlib, re, sys, urllib.error, urllib.parse, urllib.request
+url, node_ids, token_file, protocol, mode, domain_override, output = sys.argv[1:]
+if any(c in value for value in (url, node_ids, domain_override) for c in ('\n', '\r', '\x00')):
+    raise SystemExit('面板输入包含无效字符')
+try:
+    parsed = urllib.parse.urlsplit(url)
+    parsed.port
+except ValueError:
+    raise SystemExit('面板根网址格式不正确')
+if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+    raise SystemExit('填写无凭据、query或fragment的HTTP(S)面板根网址')
+if '/api/v1/server' in parsed.path or parsed.path.rstrip('/').endswith(('/config', '/user')):
+    raise SystemExit('填写面板根网址，不填写API端点')
+ids = node_ids.split(',')
+if any(not re.fullmatch(r'[1-9][0-9]*', n) or int(n) > 9223372036854775807 for n in ids) or len(set(ids)) != len(ids):
+    raise SystemExit('节点ID须是不重复的正整数，逗号分隔不加空格')
+token = pathlib.Path(token_file).read_text().strip()
+if not token or len(token) > 8192 or any(c in token for c in ('\n', '\r', '\x00')):
+    raise SystemExit('通讯密钥为空、过长或包含无效字符')
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs): return None
+opener = urllib.request.build_opener(NoRedirect())
+detected = []
+for node in ids:
+    query = urllib.parse.urlencode({'node_id': node, 'node_type': protocol, 'token': token})
+    endpoint = url.rstrip('/') + '/api/v1/server/UniProxy/config?' + query
+    try:
+        with opener.open(urllib.request.Request(endpoint, headers={'Accept': 'application/json'}), timeout=15) as response:
+            raw = response.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024: raise ValueError()
+        data = json.loads(raw)
+        port = int(data['server_port'])
+        if not 1 <= port <= 65535: raise ValueError()
+        if protocol == 'anytls':
+            tls = 1
+            sni = data.get('server_name')
+        else:
+            tls = int(data['tls'])
+            if tls not in (0, 1, 2): raise ValueError()
+            settings = data.get('tls_settings') or {}
+            if isinstance(settings, str): settings = json.loads(settings)
+            if not isinstance(settings, dict): raise ValueError()
+            sni = settings.get('server_name')
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f'读取面板配置失败：节点{node} HTTP {error.code}，请核对节点ID、通讯密钥和面板根网址（不跟随重定向）')
+    except Exception:
+        raise SystemExit(f'读取面板配置失败：节点{node}，请核对面板DNS/证书/接口和网络')
+    selected_mode = ('http' if tls == 1 else 'none') if mode == 'auto' else mode
+    domain = domain_override or sni or ''
+    if selected_mode in ('http', 'dns'):
+        if not isinstance(domain, str) or not re.fullmatch(r'(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}', domain):
+            raise SystemExit(f'节点{node}的面板SNI缺失或不是有效域名；请先在面板填写TLS域名/SNI，再运行安装器')
+        domain = domain.lower()
+        if selected_mode == 'http' and port == 80:
+            raise SystemExit(f'节点{node}代理监听80，HTTP验证无法持续续期；请改用DNS证书方式或更换节点监听端口')
+    else: domain = ''
+    detected.append((selected_mode, domain))
+if len(set(detected)) != 1:
+    raise SystemExit('多节点的TLS模式或证书域名不同，请分别安装实例，或明确指定一致的证书配置')
+selected_mode, domain = detected[0]
+pathlib.Path(output).write_text(json.dumps({'mode': selected_mode, 'domain': domain}))
+print('面板配置已读取：' + ('使用SNI ' + domain + ' 自动签发证书' if domain else '此VLESS传输无需普通TLS证书'))
+PANEL_CERT
+  cert_mode=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mode"])' "$work/certificate-detection.json")
+  cert_domain=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["domain"])' "$work/certificate-detection.json")
+fi
 [[ "$protocol" != anytls || "$cert_mode" != none ]] || die 'AnyTLS使用TLS，不能选择none'
 if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
   [[ -z "$cert_file" && -z "$key_file" ]] || die '自动模式不能同时提供 --cert / --key'
-  [[ -n "$cert_domain" ]] || ask cert_domain '证书域名（与节点SNI一致）：'
-  [[ -n "$cert_email" ]] || ask cert_email 'ACME联系邮箱：'
+  [[ -n "$cert_domain" ]] || die '面板未返回有效证书域名，请在面板填写TLS域名/SNI'
   if [[ "$cert_mode" == dns ]]; then
     [[ -n "$dns_provider" ]] || ask dns_provider 'DNS插件名称（如 dns_cf / dns_ali）：'
     [[ -n "$dns_env_file" ]] || ask dns_env_file 'DNS API凭据文件绝对路径（KEY=value）：'
@@ -225,7 +290,7 @@ mode, domain, email, provider, env_file = sys.argv[1:]
 if mode not in ('http', 'dns'): raise SystemExit(0)
 if not re.fullmatch(r'(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}', domain):
     raise SystemExit('证书域名须为普通完整域名，不含协议、路径、端口、IP或通配符')
-if not re.fullmatch(r'[A-Za-z0-9.!#$%&*+/=?^_{}|~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}', email):
+if email and not re.fullmatch(r'[A-Za-z0-9.!#$%&*+/=?^_{}|~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}', email):
     raise SystemExit('ACME联系邮箱格式不正确')
 if mode == 'dns':
     if not re.fullmatch(r'dns_[a-zA-Z0-9_]+', provider): raise SystemExit('DNS插件名称不合法，如 dns_cf / dns_ali')
@@ -307,7 +372,9 @@ bootstrap() {
     printf '%s  %s\n' '0d3f9000ac44a6331314742a88c475f79134e24fc991997883652adc59efc486' "$temporary/acme.tar.gz" | sha256sum --check --status || die 'acme.sh源码包校验失败'
     mkdir "$temporary/source"
     tar -xzf "$temporary/acme.tar.gz" --strip-components=1 -C "$temporary/source"
-    (cd "$temporary/source" && bash ./acme.sh --install --home "$base/acme" --config-home "$base/acme-data" --cert-home "$base/acme-data/certs" --no-cron --no-profile --accountemail "$email")
+    local -a account_options=()
+    if [[ -n "$email" ]]; then account_options=(--accountemail "$email"); fi
+    (cd "$temporary/source" && bash ./acme.sh --install --home "$base/acme" --config-home "$base/acme-data" --cert-home "$base/acme-data/certs" --no-cron --no-profile "${account_options[@]}")
     rm -rf -- "$temporary"
   fi
   [[ $(bash "$acme" --version | tail -n 1) == v3.1.6 ]] || die '仅支持已固定校验的acme.sh 3.1.6'

@@ -1,10 +1,10 @@
 # Xiaov2board 对接使用文档
 
-适用：Soga `2.17.0-local2`、安装器 r3、Linux amd64、传统 AnyTLS/VLESS 节点。安装器默认 AnyTLS，不询问协议；VLESS 使用 `--protocol vless`。面板接口为 `/api/v1/server/UniProxy`，暂不支持非空 `sub_type` 或 v2node 分类。
+适用：Soga `2.17.0-local2`、安装器 r4、Linux amd64、传统 AnyTLS/VLESS 节点。默认 AnyTLS，仅询问面板网址、节点 ID、通讯密钥；VLESS 使用 `--protocol vless`。接口为 `/api/v1/server/UniProxy`，暂不支持非空 `sub_type` 或 v2node 分类。
 
 ## 1. 本地启用文本与面板密钥
 
-本版不要求 `license.json`、签名、机器指纹、有效期或授权用户/节点额度检查。提示“本地授权码”时输入任意非空文本，例如 `local`、`123`、`测试`。非交互安装用 `--auth-code local`，手动配置写 `soga_key=local`。空白、换行、NUL 和超过 8192 字节的文本被拒绝。
+本版不要求 `license.json`、签名、机器指纹、有效期或授权用户/节点额度检查。安装器默认使用本地启用文本 local，不再询问。需要改文字时可用 `--auth-code 测试`；手动配置写 `soga_key=local`。空白、换行、NUL 和超过 8192 字节的文本被拒绝。
 
 文本只作为本地启动标记，不传给原版核心。原版授权 HTTP 发送流程继续停用；正常面板接口、在线/流量上报和代理出站仍联网。核心文件仍须与发行版匹配并通过完整性检查。
 
@@ -18,9 +18,9 @@
 | 后端通讯密钥 | 后台的服务器/节点通讯密钥 `server_token` |
 | 协议 | 默认 `anytls`；VLESS 显式添加 `--protocol vless` |
 | 节点 ID | 对应协议分类下的真实 ID，多节点用 `52,53`，不加空格 |
-| 本地启用文本 | 任意非空文本，如 `local` |
+| 本地启用文本 | 自动填 local，不需要输入 |
 | 节点地址 | 指向节点公网 IP 的域名或实际接入地址 |
-| TLS 证书 | HTTP/DNS 自动签发或已有证书 |
+| TLS 证书 | 默认从面板 SNI 自动签发，无需输入证书信息 |
 
 同号 ID 在 AnyTLS 与 VLESS 分类中可能属于不同节点。同实例多节点须为同一协议，各监听端口不能冲突。启动器不施加授权用户/节点额度；实际面板权限、剩余流量、设备限制和套餐有效期仍执行。
 
@@ -75,11 +75,15 @@ Linux x86_64 上以 root 执行：
 ```bash
 mkdir -p /project
 cd /project
-curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.17.0-local2/install.sh -o install.sh
+curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local2-r4/install.sh -o install.sh
 bash install.sh
 ```
 
-协议直接用 AnyTLS。依次输入面板根网址、节点 ID、本地启用文本、真实后端通讯密钥及证书方式，通讯密钥隐藏输入。VLESS 使用 `bash install.sh --protocol vless`。
+默认直接用 AnyTLS，只输入面板根网址、节点 ID、真实通讯密钥，密钥隐藏输入。安装器读取节点配置中的 `server_name`，自动使用 HTTP 验证申请证书，并配置续期。VLESS 使用 `bash install.sh --protocol vless`，普通 TLS 读取 `tls_settings.server_name`；明文及 Reality 自动跳过普通证书。
+
+请先在面板填写节点的 TLS 域名/SNI，将该域名 A/AAAA 正确解析到节点，保持公网 TCP 80 可达且本机 80 空闲。域名缺失、域名不是有效 DNS 名、节点监听 80、多节点的 TLS/SNI 不一致或接口异常时，脚本明确报错，不重复询问证书信息。不同域名的节点分别安装。用户也可通过 `--cert-domain` 明确覆盖证书域名。
+
+自动读取只获取证书域名，不会从面板下载私钥，也不能绕过 CA 的域名控制权验证。需要 DNS 验证或已有证书时，按下面高级参数配置。联系邮箱可用 `--cert-email` 指定，默认不询问。
 
 脚本按需通过 apt-get/dnf/yum 安装 curl、CA 证书、Python 3、OpenSSL、coreutils、tar 和 socat，已有依赖可用 `--skip-deps`。正式安装需要 systemd 和 root，不修改防火墙或停止已有 Web 服务。
 
@@ -128,7 +132,7 @@ bash /project/install.sh \
 
 其他服务商使用对应 acme.sh 插件和变量，例如 `dns_ali` 的 `Ali_Key`、`Ali_Secret`。凭据每行 `KEY=value`，不写 export，不执行 shell 替换。实例下的 `acme-dns.env` 权限 600；ACME 配置也可能保存凭据，这些文件不可公开。
 
-使用固定校验的 acme.sh 3.1.6 和 Let’s Encrypt，工具、账户和证书分别在实例的 `acme/`、`acme-data/`、`certs/` 中，不修改 profile 或添加 acme cron。systemd timer 管理续期。核心读取 `cert_mode=file` 和固定 PEM 路径；CLI 的 http/dns 是安装器选项。
+使用固定校验的 acme.sh 3.1.6 和 Let’s Encrypt，工具、账户和证书分别在实例的 `acme/`、`acme-data/`、`certs/` 中，不修改 profile 或添加 acme cron。systemd timer 管理续期。核心读取 `cert_mode=file` 和固定 PEM 路径；CLI 的 auto/http/dns 是安装器选项。默认 auto 需要读取面板 config，即使 prepare-only 也会读取一次；显式指定证书模式及完整域名时可只做本地准备。
 
 ### 4.3 已有证书或暂不启动
 
