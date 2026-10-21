@@ -4,20 +4,23 @@ set +x
 umask 077
 
 readonly VERSION='2.17.0-local1'
+readonly INSTALLER_REVISION='2'
 readonly ARCHIVE_NAME='soga-local1-2.17.0-linux-amd64.zip'
 readonly ARCHIVE_URL="https://github.com/kiksok/soga-binaries/releases/download/v${VERSION}/${ARCHIVE_NAME}"
 readonly ARCHIVE_SHA256='d355f7c9ac52818704ca3a3c57391c113d01bd333737c7613713eea6e617274b'
 protocol='' sub_type='' panel_url='' node_ids='' license_file='' token_file='' cert_file='' key_file=''
 listen_address='0.0.0.0' service_name='soga-217-local1' destination='' archive_file=''
 prepare_only=0 no_start=0 check_panel=0 fingerprint_only=0 interactive=0 work=''
+cert_mode='' cert_domain='' cert_email='' dns_provider='' dns_env_file='' acme_archive=''
+skip_deps=0
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 cleanup() { if [[ -n "$work" && -d "$work" ]]; then rm -rf -- "$work"; fi; }
 trap cleanup EXIT
-trap 'printf "操作失败，请检查上方错误；已有部署不会被此脚本覆盖。\n" >&2' ERR
+trap 'printf "操作失败，请检查上方错误；已有部署不会被覆盖；新建目录可能已保留，请按错误提示处理。\n" >&2' ERR
 usage() {
   cat <<'USAGE'
-Soga 2.17.0 local-1 / Xiaov2board 对接安装器（Linux x86_64）
+Soga 2.17.0 local-1 / Xiaov2board 对接安装器 r2（Linux x86_64）
 
 用法：bash install.sh [选项]
   --license FILE       单独提供的有效 license.json
@@ -26,11 +29,18 @@ Soga 2.17.0 local-1 / Xiaov2board 对接安装器（Linux x86_64）
   --panel-url URL      面板根地址，如 https://panel.example.com/
   --node-id IDS        对应协议节点ID；同协议多节点用逗号分隔
   --token-file FILE    仅保存后端通讯密钥的文本文件；省略则隐藏输入
+  --cert-mode MODE     http / dns / file / none；AnyTLS不能选none
+  --cert-domain DOMAIN 自动证书域名，应与节点SNI一致
+  --cert-email EMAIL   ACME账户联系邮箱（自动证书必填）
+  --dns-provider NAME  DNS插件，如 dns_cf、dns_ali
+  --dns-env FILE       DNS API凭据文件，KEY=value格式，不执行shell展开
+  --acme-archive FILE  使用已下载的acme.sh 3.1.6源码包，仍核对固定摘要
+  --skip-deps          不自动安装系统依赖（prepare-only默认不安装）
   --cert FILE          手动TLS证书的绝对路径（fullchain）
   --key FILE           对应私钥的绝对路径
   --listen ADDRESS     监听IP，默认 0.0.0.0
   --name NAME          服务名称，默认 soga-217-local1；只允许小写字母数字和短横线
-  --dest DIRECTORY     安装目录，默认 /opt/服务名称；必须是不存在的绝对路径
+  --dest DIRECTORY     安装目录，默认 /project/服务名称；必须是不存在的绝对路径
   --archive FILE       使用已下载的固定版本ZIP，仍核对内置SHA-256
   --check-panel        额外读取面板config/user接口，仅输出摘要
   --no-start           安装文件与服务定义，但不启用或启动服务
@@ -39,7 +49,8 @@ Soga 2.17.0 local-1 / Xiaov2board 对接安装器（Linux x86_64）
   -h, --help           显示帮助
 
 缺少的必要信息会从终端交互读取。公开下载包不含许可证和签发私钥。
-脚本不会安装系统依赖、申请证书、修改防火墙或覆盖已有部署。
+正式安装会按需安装依赖；http/dns模式使用acme.sh及systemd定时续期。
+--prepare-only / --no-start不签发证书；不修改防火墙或覆盖已有部署。
 USAGE
 }
 value() { [[ $# -ge 2 && -n "$2" ]] || die "$1 需要一个值"; }
@@ -51,6 +62,13 @@ while (($#)); do
     --panel-url) value "$@"; panel_url=$2; shift 2;;
     --node-id) value "$@"; node_ids=$2; shift 2;;
     --token-file) value "$@"; token_file=$2; shift 2;;
+    --cert-mode) value "$@"; cert_mode=$2; shift 2;;
+    --cert-domain) value "$@"; cert_domain=$2; shift 2;;
+    --cert-email) value "$@"; cert_email=$2; shift 2;;
+    --dns-provider) value "$@"; dns_provider=$2; shift 2;;
+    --dns-env) value "$@"; dns_env_file=$2; shift 2;;
+    --acme-archive) value "$@"; acme_archive=$2; shift 2;;
+    --skip-deps) skip_deps=1; shift;;
     --cert) value "$@"; cert_file=$2; shift 2;;
     --key) value "$@"; key_file=$2; shift 2;;
     --listen) value "$@"; listen_address=$2; shift 2;;
@@ -67,6 +85,26 @@ while (($#)); do
 done
 [[ -z "$sub_type" ]] || die '此安装器尚未启用 sub_type/v2node；请使用已验收的传统 VLESS/AnyTLS 节点'
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || die '仅支持 Linux x86_64 / amd64'
+install_base() {
+  local missing=0 tool
+  for tool in curl python3 sha256sum mktemp install tar openssl socat; do
+    command -v "$tool" >/dev/null || missing=1
+  done
+  ((missing)) || return 0
+  [[ $EUID -eq 0 ]] || die '自动安装依赖需要root；自行安装后可使用 --skip-deps'
+  printf '安装缺少的运行/自动证书依赖…\n'
+  if command -v apt-get >/dev/null; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates python3 openssl coreutils tar socat
+  elif command -v dnf >/dev/null; then
+    dnf install -y curl ca-certificates python3 openssl coreutils tar socat
+  elif command -v yum >/dev/null; then
+    yum install -y curl ca-certificates python3 openssl coreutils tar socat
+  else
+    die '未找到apt-get/dnf/yum，请自行安装依赖并使用 --skip-deps'
+  fi
+}
+if ((!prepare_only && !fingerprint_only && !skip_deps)); then install_base; fi
 for tool in python3 sha256sum mktemp install; do command -v "$tool" >/dev/null || die "缺少依赖：$tool"; done
 work=$(mktemp -d -t soga-install.XXXXXXXX)
 
@@ -122,7 +160,7 @@ ask() {
 [[ -n "$license_file" ]] || ask license_file '本机有效许可证文件路径：'
 [[ "$protocol" == vless || "$protocol" == anytls ]] || die '协议必须是 vless 或 anytls'
 [[ "$service_name" =~ ^[a-z][a-z0-9-]{0,39}$ ]] || die '服务名不合法'
-destination=${destination:-/opt/$service_name}
+destination=${destination:-/project/$service_name}
 [[ "$destination" =~ ^/[A-Za-z0-9._/-]+$ && "$destination" != *'/../'* && "$destination" != */.. ]] || die '安装目录须为不含空格或父目录跳转的绝对路径'
 case "$destination" in /|/opt|/etc|/usr|/usr/bin|/bin|/sbin|/tmp|/var) die '请指定专用子目录';; esac
 [[ ! -e "$destination" && ! -L "$destination" ]] || die '安装目录已存在；为避免覆盖，改用新目录或按文档更新'
@@ -137,13 +175,34 @@ if [[ -z "$token_file" ]]; then
   token_file="$work/panel-token"
 fi
 [[ -f "$token_file" && -r "$token_file" ]] || die '通讯密钥文件不可读'
-if [[ "$protocol" == anytls && -z "$cert_file" ]]; then ask cert_file 'AnyTLS完整证书链的绝对路径：'; fi
-if [[ "$protocol" == anytls && -z "$key_file" ]]; then ask key_file 'AnyTLS私钥的绝对路径：'; fi
-if [[ "$protocol" == vless && -z "$cert_file" && -z "$key_file" ]] && ((interactive)); then
-  ask cert_file 'VLESS普通TLS/WSS证书绝对路径（明文/Reality留空）：'
-  if [[ -n "$cert_file" ]]; then ask key_file '对应私钥的绝对路径：'; fi
+if [[ -z "$cert_mode" ]]; then
+  if [[ -n "$cert_file" || -n "$key_file" ]]; then cert_mode=file
+  elif [[ "$protocol" == anytls ]] || ((interactive)); then
+    ask cert_mode '证书方式（http自动 / dns自动 / file已有证书 / none无证书；AnyTLS必选证书方式）：'
+  else cert_mode=none; fi
 fi
-if [[ -n "$cert_file" || -n "$key_file" ]]; then
+case "$cert_mode" in http|dns|file|none) ;; *) die '证书方式必须是 http、dns、file 或 none';; esac
+[[ "$protocol" != anytls || "$cert_mode" != none ]] || die 'AnyTLS使用TLS，不能选择none'
+if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
+  [[ -z "$cert_file" && -z "$key_file" ]] || die '自动模式不能同时提供 --cert / --key'
+  [[ -n "$cert_domain" ]] || ask cert_domain '证书域名（与节点SNI一致）：'
+  [[ -n "$cert_email" ]] || ask cert_email 'ACME联系邮箱：'
+  if [[ "$cert_mode" == dns ]]; then
+    [[ -n "$dns_provider" ]] || ask dns_provider 'DNS插件名称（如 dns_cf / dns_ali）：'
+    [[ -n "$dns_env_file" ]] || ask dns_env_file 'DNS API凭据文件绝对路径（KEY=value）：'
+    [[ "$dns_env_file" == /* && -f "$dns_env_file" && -r "$dns_env_file" ]] || die 'DNS凭据须是可读文件的绝对路径'
+  else
+    [[ -z "$dns_provider" && -z "$dns_env_file" ]] || die 'HTTP模式不使用DNS插件或凭据'
+  fi
+  cert_file="$destination/certs/fullchain.pem"; key_file="$destination/certs/privkey.pem"
+else
+  [[ -z "$cert_domain" && -z "$cert_email" && -z "$dns_provider" && -z "$dns_env_file" && -z "$acme_archive" ]] || die '自动证书参数需要 --cert-mode http 或 dns'
+  if [[ "$cert_mode" == file ]]; then
+    [[ -n "$cert_file" ]] || ask cert_file '完整证书链的绝对路径：'
+    [[ -n "$key_file" ]] || ask key_file '对应私钥的绝对路径：'
+  else [[ -z "$cert_file" && -z "$key_file" ]] || die 'none模式不能同时提供证书文件'; fi
+fi
+if [[ "$cert_mode" == file ]]; then
   [[ "$cert_file" == /* && "$key_file" == /* && -r "$cert_file" && -r "$key_file" ]] || die '证书和私钥必须成对提供可读的绝对路径'
   command -v openssl >/dev/null || die '校验证书需要 openssl'
   openssl x509 -in "$cert_file" -noout -checkend 0 >/dev/null || die '证书无效或已过期'
@@ -155,8 +214,41 @@ if ((!prepare_only)); then
   [[ $EUID -eq 0 ]] || die '安装systemd服务需要root；仅生成文件请用 --prepare-only --dest 专用目录'
   command -v systemctl >/dev/null || die '缺少 systemctl'
   [[ -d /run/systemd/system ]] || die '系统未运行systemd；请使用 --prepare-only 后手动管理进程'
+  if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
+    for unit in "$service_name-cert-renew.service" "$service_name-cert-renew.timer"; do
+      [[ ! -e "/etc/systemd/system/$unit" && ! -L "/etc/systemd/system/$unit" ]] || die "续期unit已存在：$unit"
+      if systemctl cat "$unit" >/dev/null 2>&1; then die "续期unit已存在：$unit"; fi
+    done
+  fi
   [[ ! -e "/etc/systemd/system/$service_name.service" && ! -L "/etc/systemd/system/$service_name.service" ]] || die '同名服务文件已存在'
   if systemctl cat "$service_name.service" >/dev/null 2>&1; then die '同名systemd服务已存在；请使用全新 --name'; fi
+fi
+
+python3 - "$cert_mode" "$cert_domain" "$cert_email" "$dns_provider" "$dns_env_file" <<'PY'
+import pathlib, re, sys
+mode, domain, email, provider, env_file = sys.argv[1:]
+if mode not in ('http', 'dns'): raise SystemExit(0)
+if not re.fullmatch(r'(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}', domain):
+    raise SystemExit('证书域名须为普通完整域名，不含协议、路径、端口、IP或通配符')
+if not re.fullmatch(r'[A-Za-z0-9.!#$%&*+/=?^_{}|~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}', email):
+    raise SystemExit('ACME联系邮箱格式不正确')
+if mode == 'dns':
+    if not re.fullmatch(r'dns_[a-zA-Z0-9_]+', provider): raise SystemExit('DNS插件名称不合法，如 dns_cf / dns_ali')
+    count = 0
+    for line in pathlib.Path(env_file).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'): continue
+        key, sep, value = line.partition('=')
+        if not sep or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or not value or '\x00' in value:
+            raise SystemExit('DNS凭据须为非空KEY=value，不使用export或shell命令')
+        if key in {'HOME', 'CODEX_HOME', 'PATH', 'ENV', 'BASH_ENV', 'SHELLOPTS', 'SHELL', 'IFS', 'PWD', 'TMPDIR'} or key.startswith(('LD_', 'PYTHON', 'BASH_FUNC_')):
+            raise SystemExit('DNS凭据包含不允许的进程环境变量')
+        count += 1
+    if not count: raise SystemExit('DNS凭据文件为空')
+PY
+if [[ -n "$acme_archive" ]]; then
+  [[ -f "$acme_archive" && -r "$acme_archive" ]] || die 'acme.sh源码包不可读'
+  printf '%s  %s\n' '0d3f9000ac44a6331314742a88c475f79134e24fc991997883652adc59efc486' "$acme_archive" | sha256sum --check --status || die 'acme.sh源码包摘要不匹配'
 fi
 
 python3 - "$work/bundle/soga.conf" "$panel_url" "$node_ids" "$token_file" "$protocol" "$listen_address" "$cert_file" "$key_file" <<'PY'
@@ -186,6 +278,112 @@ if cert:
     text += f'cert_mode=file\ncert_file={cert}\nkey_file={key}\n'
 pathlib.Path(target).write_text(text)
 PY
+if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
+  if [[ "$cert_mode" == dns ]]; then install -m 600 "$dns_env_file" "$work/bundle/acme-dns.env"; fi
+  if [[ -n "$acme_archive" ]]; then install -m 600 "$acme_archive" "$work/bundle/acme-source.tar.gz"; fi
+  {
+    printf '#!/usr/bin/env bash\nset -Eeuo pipefail\nset +x\numask 077\n'
+    printf 'base=%q\nmode=%q\ndomain=%q\nemail=%q\nprovider=%q\nservice=%q\n' "$destination" "$cert_mode" "$cert_domain" "$cert_email" "$dns_provider" "$service_name"
+    cat <<'CERT_SCRIPT'
+# Embedded by the installer after its instance-specific, shell-quoted variables.
+die() { printf '证书操作失败：%s\n' "$*" >&2; exit 1; }
+acme="$base/acme/acme.sh"
+check_certificate() {
+  local a b
+  openssl x509 -in "$base/certs/fullchain.pem" -noout -checkend 0 >/dev/null || die '证书不存在、无效或已过期'
+  openssl x509 -in "$base/certs/fullchain.pem" -noout -checkhost "$domain" >/dev/null || die '证书域名不匹配'
+  a=$(openssl x509 -in "$base/certs/fullchain.pem" -pubkey -noout)
+  b=$(openssl pkey -in "$base/certs/privkey.pem" -passin pass: -pubout 2>/dev/null) || die '私钥无效'
+  [[ "$a" == "$b" ]] || die '证书与私钥不匹配'
+}
+bootstrap() {
+  local temporary
+  for tool in curl tar python3 sha256sum openssl; do command -v "$tool" >/dev/null || die "缺少依赖 $tool"; done
+  if [[ ! -f "$acme" ]]; then
+    temporary=$(mktemp -d "$base/acme-bootstrap.XXXXXXXX")
+    if [[ -f "$base/acme-source.tar.gz" ]]; then
+      cp -- "$base/acme-source.tar.gz" "$temporary/acme.tar.gz"
+    else
+      curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 180 \
+        'https://codeload.github.com/acmesh-official/acme.sh/tar.gz/refs/tags/3.1.6' -o "$temporary/acme.tar.gz"
+    fi
+    printf '%s  %s\n' '0d3f9000ac44a6331314742a88c475f79134e24fc991997883652adc59efc486' "$temporary/acme.tar.gz" | sha256sum --check --status || die 'acme.sh源码包校验失败'
+    mkdir "$temporary/source"
+    tar -xzf "$temporary/acme.tar.gz" --strip-components=1 -C "$temporary/source"
+    (cd "$temporary/source" && bash ./acme.sh --install --home "$base/acme" --config-home "$base/acme-data" --cert-home "$base/acme-data/certs" --no-cron --no-profile --accountemail "$email")
+    rm -rf -- "$temporary"
+  fi
+  [[ $(bash "$acme" --version | tail -n 1) == v3.1.6 ]] || die '仅支持已固定校验的acme.sh 3.1.6'
+  run_acme --set-default-ca --server letsencrypt
+}
+run_acme() {
+  python3 - "$base" "$mode" "$@" <<'ACME_PY'
+import base64, os, pathlib, re, subprocess, sys, urllib.parse
+base, mode, *arguments = sys.argv[1:]
+env = os.environ.copy(); secrets = []
+if mode == 'dns':
+    for line in pathlib.Path(base, 'acme-dns.env').read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'): continue
+        key, sep, value = line.partition('=')
+        if not sep or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+            raise SystemExit('DNS凭据文件格式不正确')
+        if key in {'HOME', 'CODEX_HOME', 'PATH', 'ENV', 'BASH_ENV', 'SHELLOPTS', 'SHELL', 'IFS', 'PWD', 'TMPDIR'} or key.startswith(('LD_', 'PYTHON', 'BASH_FUNC_')):
+            raise SystemExit('DNS凭据包含不允许的进程环境变量')
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"): value = value[1:-1]
+        if not value or '\x00' in value: raise SystemExit('DNS凭据为空或包含无效字符')
+        env[key] = value
+        secrets.extend((value, urllib.parse.quote(value, safe=''), base64.b64encode(value.encode()).decode()))
+command = ['bash', str(pathlib.Path(base, 'acme/acme.sh')), '--home', str(pathlib.Path(base, 'acme')), '--config-home', str(pathlib.Path(base, 'acme-data')), '--cert-home', str(pathlib.Path(base, 'acme-data/certs')), *arguments]
+result = subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+output = result.stdout
+for secret in sorted(set(secrets), key=len, reverse=True): output = output.replace(secret, '[REDACTED]')
+print(output, end='')
+if result.returncode and not (result.returncode == 2 and '--issue' in arguments):
+    raise SystemExit('acme.sh执行失败；未启动节点。请核对域名验证、DNS权限和网络后重试')
+ACME_PY
+}
+case "${1:-}" in
+  bootstrap) bootstrap;;
+  issue)
+    bootstrap
+    install -d -m 700 "$base/certs"
+    if [[ "$mode" == http ]]; then
+      command -v socat >/dev/null || die 'HTTP验证缺少socat'
+      python3 - <<'PORT_PY'
+import socket
+try:
+    with socket.socket() as listener: listener.bind(('0.0.0.0', 80))
+except OSError:
+    raise SystemExit('HTTP验证需要本机TCP 80空闲；请改用DNS验证，或处理占用后重试')
+PORT_PY
+      run_acme --issue --server letsencrypt --keylength ec-256 -d "$domain" --standalone
+    else
+      [[ -f "$base/acme/dnsapi/$provider.sh" ]] || die '此版本acme.sh没有该DNS插件'
+      run_acme --issue --server letsencrypt --keylength ec-256 -d "$domain" --dns "$provider"
+    fi
+    run_acme --install-cert -d "$domain" --ecc --fullchain-file "$base/certs/fullchain.pem" --key-file "$base/certs/privkey.pem" --reloadcmd "$base/certificate-reload.sh"
+    chmod 600 "$base/certs/fullchain.pem" "$base/certs/privkey.pem"
+    check_certificate
+    ;;
+  renew)
+    [[ -f "$acme" ]] || die '请先运行 certificate.sh issue 完成首次签发'
+    run_acme --cron
+    check_certificate
+    ;;
+  check) check_certificate;;
+  *) die '用法：certificate.sh bootstrap | issue | renew | check';;
+esac
+CERT_SCRIPT
+  } >"$work/bundle/certificate.sh"
+  chmod 700 "$work/bundle/certificate.sh"
+  {
+    printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n'
+    printf '%q check\n' "$destination/certificate.sh"
+    printf 'if systemctl is-active --quiet %q; then\n  systemctl restart %q\nfi\n' "$service_name.service" "$service_name.service"
+  } >"$work/bundle/certificate-reload.sh"
+  chmod 700 "$work/bundle/certificate-reload.sh"
+fi
 install -m 600 "$license_file" "$work/bundle/license.json"
 printf '校验本地许可证、机器和配置…\n'
 "$work/bundle/soga-offline" --check --config "$work/bundle/soga.conf"
@@ -234,6 +432,9 @@ install -d -m 700 "$destination/tmp"
 (cd "$destination" && sha256sum soga-offline soga-license soga.core > SHA256SUMS)
 if ((prepare_only)); then
   printf '文件已准备并通过本地检查：%s\n未修改systemd或启动服务。\n' "$destination"
+  if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
+    printf '自动证书尚未签发，未安装续期timer。正式部署前运行：bash %s/certificate.sh issue\n' "$destination"
+  fi
   exit 0
 fi
 install -d -m 755 /etc/soga
@@ -262,13 +463,49 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 UNIT
+if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
+  sed -i "/^ExecStart=/i ExecStartPre=$destination/certificate.sh check" "/etc/systemd/system/$service_name.service"
+  cat >"/etc/systemd/system/$service_name-cert-renew.service" <<UNIT
+[Unit]
+Description=Renew TLS certificate for $service_name
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$destination
+ExecStart=$destination/certificate.sh renew
+TimeoutStartSec=30min
+UMask=0077
+UNIT
+  cat >"/etc/systemd/system/$service_name-cert-renew.timer" <<UNIT
+[Unit]
+Description=Daily TLS certificate renewal check for $service_name
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=$service_name-cert-renew.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+fi
 systemctl daemon-reload
 if ((no_start)); then
-  printf '已安装但未启动。启动命令：systemctl enable --now %s\n' "$service_name"
+  if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then
+    printf '已安装但未签发/启动。先执行：bash %s/certificate.sh issue\n再执行：systemctl enable --now %s %s-cert-renew.timer\n' "$destination" "$service_name" "$service_name"
+  else
+    printf '已安装但未启动。启动命令：systemctl enable --now %s\n' "$service_name"
+  fi
 else
+  if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then "$destination/certificate.sh" issue; fi
   systemctl enable --now "$service_name.service"
   sleep 3
   systemctl is-active --quiet "$service_name.service" || die "服务尚未运行，请执行 journalctl -u $service_name -n 80"
+  if [[ "$cert_mode" == http || "$cert_mode" == dns ]]; then systemctl enable --now "$service_name-cert-renew.timer"; fi
   printf '服务已启动：%s\n' "$service_name"
 fi
 printf '配置：%s/soga.conf\n日志：journalctl -u %s -f\n' "$destination" "$service_name"

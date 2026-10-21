@@ -1,6 +1,6 @@
 # Xiaov2board 对接使用文档
 
-适用版本：Soga `2.17.0-local1`，Linux amd64。本文的传统节点示例对应 Xiaov2board 的 `/api/v1/server/UniProxy` 接口，使用 `vless` 和 `anytls` 两种节点类型。从2.16.4升级请先阅读[保留旧版的升级步骤](#71-从2164升级并保留回退)。
+适用版本：Soga `2.17.0-local1`，安装器 `r2`，Linux amd64。本文的传统节点示例对应 Xiaov2board 的 `/api/v1/server/UniProxy` 接口，使用 `vless` 和 `anytls` 两种节点类型。从2.16.4升级请先阅读[保留旧版的升级步骤](#71-从2164升级并保留回退)。
 
 ## 1. 先准备哪些信息
 
@@ -14,7 +14,7 @@
 | 客户端连接端口 | 客户端访问的公网端口 | `443` | 面板节点的连接端口/`port` |
 | 后端监听端口 | Soga在本机实际监听的端口 | `443` | 面板节点的服务端口/`server_port` |
 | 有效本地许可证 | 对应此程序版本及目标机器的签名文件 | `license.json` | 脚本 `--license` |
-| TLS证书和私钥 | 自行申请并部署的证书文件 | `/etc/ssl/soga/fullchain.pem`、`privkey.pem` | `cert_file` / `key_file` |
+| TLS证书和私钥 | 自动签发，或使用已有证书 | `/project/certificates/vless/fullchain.pem`、`privkey.pem` | `cert_file` / `key_file` |
 
 `server_token` 不是后台登录密码、用户订阅token、用户UUID，也不是 Soga 本地许可证。面板账户密码不需要填写到节点配置中。此版本不需要填写原厂 `soga_key`。
 
@@ -44,7 +44,7 @@
 | 显示 | 开启 | 决定是否出现在订阅；不替代权限组设置 |
 | 父节点 | 留空 | 初次独立部署不设置父节点 |
 
-保存后记下节点ID。服务端需要配置有效证书文件；仅在面板填写SNI不会自动生成本机证书。正式客户端保留证书验证，不使用跳过验证来掩盖证书错误。
+保存后记下节点ID。服务端可通过安装器选择HTTP/DNS自动签发，也可提供已有证书；仅在面板填写SNI不会自动完成签发和域名验证。正式客户端保留证书验证，不使用跳过验证来掩盖证书错误。
 
 如果只在受控环境测试无TLS TCP，面板设 `tls=0`，配置无需证书。公网日常使用建议启用TLS。
 
@@ -78,7 +78,7 @@
 | `padding_scheme` | 留空使用默认 | 只在明确需要时按面板支持格式修改 |
 | 权限组/倍率/显示 | 与测试套餐匹配、1、开启 | 与VLESS同理 |
 
-对应的AnyTLS配置接口返回 `server_port`、`server_name` 和 `padding_scheme`，不需要自己添加VLESS的 `network/tls` 字段。AnyTLS本身使用TLS，节点服务器必须另配证书和私钥。客户端密码使用面板用户的UUID，不是通讯密钥。
+对应的AnyTLS配置接口返回 `server_port`、`server_name` 和 `padding_scheme`，不需要自己添加VLESS的 `network/tls` 字段。AnyTLS本身使用TLS，节点服务器须选择自动证书方式，或配置已有证书和私钥。客户端密码使用面板用户的UUID，不是通讯密钥。
 
 ### 2.4 Reality / Vision / MLKEM
 
@@ -101,11 +101,11 @@ Reality使用面板 `tls=2`、对应服务端私钥、目标地址/端口、允�
 在目标服务器下载脚本并取得机器指纹：
 
 ```bash
-curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.17.0-local1/install.sh -o install.sh
+curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local1-r2/install.sh -o install.sh
 bash install.sh --fingerprint
 ```
 
-将输出指纹交给持有对应签发私钥的管理员，取得本机可用的 `license.json` 后，单独放到服务器，例如 `/secure/license.json`。许可证不能直接手改客户、日期或额度，修改后需要重新签名。迁移到另一台机器前确认机器绑定是否需要重签。
+将输出指纹交给持有对应签发私钥的管理员，取得本机可用的 `license.json` 后，单独放到服务器，例如 `/project/licenses/license.json`。许可证不能直接手改客户、日期或额度，修改后需要重新签名。迁移到另一台机器前确认机器绑定是否需要重签。
 
 依赖示例：
 
@@ -118,19 +118,19 @@ sudo apt-get install -y curl ca-certificates python3 openssl coreutils
 sudo dnf install -y curl ca-certificates python3 openssl coreutils
 ```
 
-脚本不会自动修改防火墙、安装依赖或申请证书。请在云安全组和本机防火墙放行面板 `server_port` 对应的入站TCP端口；使用其他转发模式时按实际需要配置。服务端必须能访问面板HTTPS地址及正常代理目的地址。
+正式安装会按需安装依赖；选择HTTP/DNS模式会使用acme.sh自动签发并设置续期，签发失败时不启动节点。`--prepare-only`不安装依赖或systemd，也不签发；`--no-start`不签发或启动。脚本不修改防火墙。请在云安全组和本机防火墙放行面板 `server_port` 对应的入站TCP端口；使用其他转发模式时按实际需要配置。服务端必须能访问面板HTTPS地址及正常代理目的地址。
 
 ## 4. 使用脚本安装
 
 ### 4.1 交互式安装
 
 ```bash
-sudo bash install.sh --license /secure/license.json
+sudo bash install.sh --license /project/licenses/license.json
 ```
 
-依次输入协议、面板根地址、节点ID和后端通讯密钥。密钥输入不回显。AnyTLS会继续询问证书和私钥路径；VLESS也会询问可选证书路径，普通TLS/WSS填写证书和私钥，明文TCP/WS或Reality留空。
+依次输入协议、面板根地址、节点ID和后端通讯密钥。密钥输入不回显。随后选择证书方式：`http` / `dns` 自动签发，`file` 使用已有证书，`none` 用于VLESS明文TCP/WS或Reality。AnyTLS不能选 `none`。自动模式询问域名和ACME联系邮箱，DNS模式还需插件名称及凭据文件；手动模式询问证书和私钥路径。
 
-默认服务名 `soga-217-local1`，安装目录 `/opt/soga-217-local1`。已有同名目录或服务不会被覆盖。脚本会校验固定版本ZIP和解压文件摘要、执行本地 `--check`，通过后安装并启用服务。升级时先增加 `--no-start`，按第7.1节手动切换，避免与正在运行的旧版占用相同端口。
+默认服务名 `soga-217-local1`，安装目录 `/project/soga-217-local1`。已有同名目录或服务不会被覆盖。脚本会校验固定版本ZIP和解压文件摘要、执行本地 `--check`，通过后安装并启用服务。升级时先增加 `--no-start`，按第7.1节手动切换，避免与正在运行的旧版占用相同端口。
 
 ### 4.2 明确参数：VLESS TLS
 
@@ -147,13 +147,13 @@ unset PANEL_SECRET
 
 ```bash
 sudo bash install.sh \
-  --license /secure/license.json \
+  --license /project/licenses/license.json \
   --protocol vless \
   --panel-url https://panel.example.com/ \
   --node-id 37 \
   --token-file ./panel-token.txt \
-  --cert /etc/ssl/soga/fullchain.pem \
-  --key /etc/ssl/soga/privkey.pem \
+  --cert /project/certificates/vless/fullchain.pem \
+  --key /project/certificates/vless/privkey.pem \
   --name soga-217-vless \
   --check-panel
 ```
@@ -164,13 +164,13 @@ sudo bash install.sh \
 
 ```bash
 sudo bash install.sh \
-  --license /secure/license.json \
+  --license /project/licenses/license.json \
   --protocol anytls \
   --panel-url https://panel.example.com/ \
   --node-id 52 \
   --token-file ./panel-token.txt \
-  --cert /etc/ssl/soga-anytls/fullchain.pem \
-  --key /etc/ssl/soga-anytls/privkey.pem \
+  --cert /project/certificates/anytls/fullchain.pem \
+  --key /project/certificates/anytls/privkey.pem \
   --name soga-217-anytls \
   --check-panel
 ```
@@ -181,17 +181,79 @@ sudo bash install.sh \
 
 ```bash
 # 在专用目录准备文件并校验许可证，不修改systemd或启动核心
-bash install.sh --prepare-only --dest /tmp/soga-217-preview \
-  --license /secure/license.json --protocol vless \
+bash install.sh --prepare-only --dest /project/soga-217-preview \
+  --license /project/licenses/license.json --protocol vless \
   --panel-url https://panel.example.com/ --node-id 37 \
   --token-file ./panel-token.txt
 
 # 已下载ZIP时增加 --archive 参数，仍校验脚本内固定摘要
 sudo bash install.sh --archive ./soga-local1-2.17.0-linux-amd64.zip \
-  --license /secure/license.json --no-start
+  --license /project/licenses/license.json --no-start
 ```
 
-`--no-start` 会安装systemd定义，但不启用或启动；准备好配置后执行 `systemctl enable --now 服务名`。无systemd环境用 `--prepare-only`，再按自己的进程管理器运行。先选不存在的专用目录，不要指向已有业务目录。
+`--no-start` 会安装systemd定义，但不启用、启动或签发证书；自动证书模式先运行 `/project/服务名/certificate.sh issue`，成功后执行 `systemctl enable --now 服务名 服务名-cert-renew.timer`；已有证书/none模式只启动主服务。无systemd环境用 `--prepare-only`，再按自己的进程管理器运行。先选不存在的专用目录，不要指向已有业务目录。
+
+### 4.5 自动签发：HTTP验证
+
+与原版一样使用 acme.sh，并选择 Let’s Encrypt 为CA。安装器固定校验 acme.sh 3.1.6 源码包，不下载官方Soga程序或原版管理器。程序、证书及ACME账户数据分别放在 `/project/服务名/`、`certs/`、`acme-data/` 下；不修改用户profile或添加acme cron，续期交给systemd timer。
+
+先将证书域名的A/AAAA记录指向本节点。HTTP验证需要公网TCP 80可达、且本机80空闲；IPv6记录也须正确。不自动停止已有Web服务或修改防火墙。原始AnyTLS/普通TCP直连域名应使用DNS直连解析。代理端口可用443、8443等，证书验证端口与代理端口是两回事；代理本身监听80时请改用DNS验证。
+
+```bash
+sudo bash install.sh \
+  --license /project/licenses/license.json \
+  --protocol anytls \
+  --panel-url https://panel.example.com/ \
+  --node-id 52 \
+  --token-file /project/panel-token.txt \
+  --cert-mode http \
+  --cert-domain anytls.example.com \
+  --cert-email admin@example.com \
+  --name soga-217-anytls
+```
+
+VLESS普通TLS/WSS也可使用相同自动证书参数，改成对应协议和节点ID。证书域名须与面板SNI/客户端验证的域名一致；不同域名的节点应分别安装实例。此流程一次签发一个普通域名，不接受IP证书或通配符。
+
+### 4.6 自动签发：DNS验证
+
+80端口不可用时，选择DNS验证。以Cloudflare的 `dns_cf` 插件为例，创建一个受限凭据文件。API Token需要目标区域的DNS编辑权限和区域读取权限，不要使用面板通讯密钥。
+
+```bash
+umask 077
+read -r -s -p 'Cloudflare DNS API Token: ' DNS_SECRET; printf '\n'
+printf 'CF_Token=%s\n' "$DNS_SECRET" > /project/acme-dns.env
+unset DNS_SECRET
+
+sudo bash install.sh \
+  --license /project/licenses/license.json \
+  --protocol anytls \
+  --panel-url https://panel.example.com/ \
+  --node-id 52 \
+  --token-file /project/panel-token.txt \
+  --cert-mode dns \
+  --cert-domain anytls.example.com \
+  --cert-email admin@example.com \
+  --dns-provider dns_cf \
+  --dns-env /project/acme-dns.env \
+  --name soga-217-anytls
+```
+
+其他服务商使用acme.sh对应DNS插件及其要求的环境变量，例如 `dns_ali` 配合 `Ali_Key`、`Ali_Secret`。文件每行 `KEY=value`，不写 `export`，不执行shell替换。安装器将凭据复制为实例下的 `acme-dns.env`（600），acme.sh也可能在私有账户配置中保存凭据；这些文件不可公开。
+
+### 4.7 签发失败后的重试与验收
+
+准备、签发和续期的调用、证书部署、服务重启以及失败处理已通过合成环境检查，真实acme.sh的固定包安装已验证。测试未向公网CA申请证书；部署时须完成真实域名验证。
+
+首次签发失败不会启动主服务或启用续期timer，新建目录和服务定义会保留。修复DNS/80端口/API权限后执行：
+
+```bash
+sudo /project/soga-217-anytls/certificate.sh issue
+sudo systemctl enable --now soga-217-anytls soga-217-anytls-cert-renew.timer
+sudo systemctl list-timers soga-217-anytls-cert-renew.timer
+sudo journalctl -u soga-217-anytls-cert-renew.service -n 80 --no-pager
+```
+
+`--prepare-only`只生成文件，不安装unit或timer，不能仅靠启动命令转成完整systemd部署；验收后选一个新的正式目录重新运行安装器。`--no-start`会生成完整unit，可按上面的命令完成首次签发和启用。
 
 ## 5. 不用脚本，手动填写配置
 
@@ -211,8 +273,8 @@ tcp_timeout=120
 udp_timeout=2
 forbidden_bit_torrent=false
 cert_mode=file
-cert_file=/etc/ssl/soga/fullchain.pem
-key_file=/etc/ssl/soga/privkey.pem
+cert_file=/project/certificates/vless/fullchain.pem
+key_file=/project/certificates/vless/privkey.pem
 ```
 
 | 本地字段 | 如何填写 |
@@ -225,7 +287,7 @@ key_file=/etc/ssl/soga/privkey.pem
 | `webapi_key` | 面板后端通讯密钥 `server_token` |
 | `listen` | 直连一般填 `0.0.0.0`；本机反代可填 `127.0.0.1` |
 | `check_interval` / `submit_interval` | 初始填60秒；面板也返回 `base_config.pull_interval/push_interval`，须一并核对面板设置 |
-| `cert_mode` | 手动证书填 `file` |
+| `cert_mode` | 此安装器统一生成 `file`，自动签发也由外部acme.sh部署到固定PEM路径；CLI的 `--cert-mode http/dns` 不是直接写入核心的同名字段 |
 | `cert_file` / `key_file` | 完整证书链及匹配私钥的绝对路径；AnyTLS/普通TLS需要，明文TCP/WS不填 |
 
 保持一行一个 `key=value`，不要写YAML、JSON或带 `[section]` 的INI；不要重复同一个字段。节点监听端口从面板 `server_port` 获取，无需另填本地端口。
@@ -272,29 +334,29 @@ sudo systemctl stop soga-217-vless
 sudo systemctl disable --now soga-217-vless
 ```
 
-脚本的配置与许可证在 `/opt/服务名/` 下，均按受限权限保存；临时运行文件位于该目录的 `tmp/`。脚本安装后 `SHA256SUMS` 只记录三个不可变二进制，修改配置不影响二进制校验。
+脚本的配置与许可证在 `/project/服务名/` 下，均按受限权限保存；临时运行文件位于该目录的 `tmp/`。脚本安装后 `SHA256SUMS` 只记录三个不可变二进制，修改配置不影响二进制校验。
 
-证书续期后核对链和私钥路径，并重启相应服务，不假设自动热加载。许可证到期、移除或变为无效时启动器会停止核心；许可证调整或迁机需由对应签发管理员处理。
+自动模式为每个实例安装 `服务名-cert-renew.timer`，每日加随机延迟检查续期；证书实际更新成功后由部署hook校验证书并重启对应主服务，未到续期时间不会重启。`--no-start`不会启用timer。手动证书模式仍需由自己的续期流程更新证书并重启。许可证到期、移除或变为无效时启动器会停止核心；许可证调整或迁机需由对应签发管理员处理。
 
 ### 7.1 从2.16.4升级并保留回退
 
 新版本不自动覆盖旧目录、替换现有服务或升级现有许可证。许可证绑定的程序与清单摘要已变化，需要签发管理员为2.17.0准备对应许可证；保留旧版许可证用于回退。以下以旧服务 `soga-local2`、新服务 `soga-217-local1` 为例，实际名称可通过 `systemctl status` 确认。
 
-1. 保留原安装目录及配置、许可证，另行安全备份。旧版 `license.json` 留在旧安装目录，新版许可证另存为 `/secure/license-2.17.0.json`，不要覆盖旧版许可证。记录旧服务名、节点类型/ID、面板地址、证书路径和实际端口；不要把真实配置提交到公开仓库。
+1. 保留原安装目录及配置、许可证，另行安全备份。旧版 `license.json` 留在旧安装目录，新版许可证另存为 `/project/licenses/license-2.17.0.json`，不要覆盖旧版许可证。记录旧服务名、节点类型/ID、面板地址、证书路径和实际端口；不要把真实配置提交到公开仓库。
 2. 下载本版安装脚本，使用全新服务名和目录，添加 `--no-start`。与旧版使用同一节点/端口时，此时只准备新版，保持旧版继续服务。
 
 ```bash
-curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/v2.17.0-local1/install.sh -o install-2.17.0.sh
+curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local1-r2/install.sh -o install-2.17.0.sh
 sudo bash install-2.17.0.sh \
-  --license /secure/license-2.17.0.json \
+  --license /project/licenses/license-2.17.0.json \
   --protocol vless \
   --panel-url https://panel.example.com/ \
   --node-id 37 \
   --token-file ./panel-token.txt \
-  --cert /etc/ssl/soga/fullchain.pem \
-  --key /etc/ssl/soga/privkey.pem \
+  --cert /project/certificates/vless/fullchain.pem \
+  --key /project/certificates/vless/privkey.pem \
   --name soga-217-local1 \
-  --dest /opt/soga-217-local1 \
+  --dest /project/soga-217-local1 \
   --check-panel --no-start
 ```
 
