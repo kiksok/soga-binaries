@@ -1,0 +1,8 @@
+license*.json
+claims*.json
+*.pem
+*.key
+*.crt
+panel-token*
+soga.conf
+*.log
