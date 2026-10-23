@@ -1,6 +1,6 @@
 # Xiaov2board 对接使用文档
 
-适用：Soga `2.17.0-local2`、安装器 r4、Linux amd64、传统 AnyTLS/VLESS 节点。默认 AnyTLS，仅询问面板网址、节点 ID、通讯密钥；VLESS 使用 `--protocol vless`。接口为 `/api/v1/server/UniProxy`，暂不支持非空 `sub_type` 或 v2node 分类。
+适用：Soga `2.17.0-local2`、安装器 r5、Linux amd64、传统 AnyTLS/VLESS 节点。默认 AnyTLS，仅询问面板网址、节点 ID、通讯密钥；VLESS 使用 `--protocol vless`。接口为 `/api/v1/server/UniProxy`，暂不支持非空 `sub_type` 或 v2node 分类。
 
 ## 1. 本地启用文本与面板密钥
 
@@ -75,7 +75,7 @@ Linux x86_64 上以 root 执行：
 ```bash
 mkdir -p /project
 cd /project
-curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local2-r4/install.sh -o install.sh
+curl -fL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local2-r5/install.sh -o install.sh
 bash install.sh
 ```
 
@@ -221,3 +221,5 @@ systemctl status soga-217-local2 --no-pager
 ```
 
 自动证书模式先完成首次签发，再启用 timer。验证客户端、用户增删和上报后启用新版开机启动、禁用旧版。回退时停新版及其 timer，启动保留的旧版，旧版仍用原有授权方式。避免两套服务占用同一端口或同时更新同一证书。
+
+面板预检和SNI发现请求使用与Go后端一致的User-Agent，兼容拒绝Python默认请求标识的面板访问防护。

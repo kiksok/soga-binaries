@@ -4,7 +4,7 @@ set +x
 umask 077
 
 readonly VERSION='2.17.0-local2'
-readonly INSTALLER_REVISION='4'
+readonly INSTALLER_REVISION='5'
 readonly ARCHIVE_NAME='soga-local2-2.17.0-linux-amd64.zip'
 readonly ARCHIVE_URL="https://github.com/kiksok/soga-binaries/releases/download/v${VERSION}/${ARCHIVE_NAME}"
 readonly ARCHIVE_SHA256='48c94ecd32b02dc3d7ea8b62a8d706aa8786e23962fff9bc9ac38771ddd33611'
@@ -20,7 +20,7 @@ trap cleanup EXIT
 trap 'printf "操作失败，请检查上方错误；已有部署不会被覆盖；新建目录可能已保留，请按错误提示处理。\n" >&2' ERR
 usage() {
   cat <<'USAGE'
-Soga 2.17.0 local-2 / Xiaov2board 对接安装器 r4（Linux x86_64）
+Soga 2.17.0 local-2 / Xiaov2board 对接安装器 r5（Linux x86_64）
 
 用法：bash install.sh [选项]
   --auth-code TEXT     本地启用文本，默认local，不再询问，不联网验码
@@ -204,7 +204,7 @@ for node in ids:
     query = urllib.parse.urlencode({'node_id': node, 'node_type': protocol, 'token': token})
     endpoint = url.rstrip('/') + '/api/v1/server/UniProxy/config?' + query
     try:
-        with opener.open(urllib.request.Request(endpoint, headers={'Accept': 'application/json'}), timeout=15) as response:
+        with opener.open(urllib.request.Request(endpoint, headers={'Accept': 'application/json', 'User-Agent': 'Go-http-client/1.1'}), timeout=15) as response:
             raw = response.read(8 * 1024 * 1024 + 1)
         if len(raw) > 8 * 1024 * 1024: raise ValueError()
         data = json.loads(raw)
@@ -464,7 +464,7 @@ for node in values['node_id'].split(','):
         query = urllib.parse.urlencode({'node_id': node, 'node_type': values['server_type'], 'token': values['webapi_key']})
         url = values['webapi_url'].rstrip('/') + '/api/v1/server/UniProxy/' + endpoint + '?' + query
         try:
-            with opener.open(urllib.request.Request(url, headers={'Accept': 'application/json'}), timeout=10) as r:
+            with opener.open(urllib.request.Request(url, headers={'Accept': 'application/json', 'User-Agent': 'Go-http-client/1.1'}), timeout=10) as r:
                 raw = r.read(8 * 1024 * 1024 + 1)
                 if len(raw) > 8 * 1024 * 1024:
                     raise ValueError('body too large')

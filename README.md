@@ -2,7 +2,7 @@
 
 Linux amd64 · Xiaov2board · 2.17.0-local2 · 默认 AnyTLS
 
-安装器 r4 默认使用 `anytls`，只询问面板网址、节点 ID、通讯密钥。读取面板节点的 SNI 后自动申请和续期证书，不询问证书方式、域名、路径、邮箱或本地启用文本。需要 VLESS 时传入 `--protocol vless`。
+安装器 r5 默认使用 `anytls`，只询问面板网址、节点 ID、通讯密钥。读取面板节点的 SNI 后自动申请和续期证书，不询问证书方式、域名、路径、邮箱或本地启用文本。需要 VLESS 时传入 `--protocol vless`。
 
 本版使用本地启用文本，填写任意非空内容即可，例如 `local`、`123` 或中文。无需 `license.json`、签名、机器绑定或到期检查。本地文本不传给原版核心，原版授权 HTTP 发送流程继续停用。正常面板接口、流量和在线上报、代理出站及证书签发仍按业务需要联网。
 
@@ -17,7 +17,7 @@ Linux x86_64 服务器上，以 root 执行：
 ```bash
 mkdir -p /project
 cd /project
-bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local2-r4/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/kiksok/soga-binaries/installer-2.17.0-local2-r5/install.sh)
 ```
 
 只填写面板根网址、AnyTLS 节点 ID、真实后端通讯密钥。**密钥必须是 Xiaov2board 实际的 `server_token`。** 本地启用文本默认设为 local，无需输入。
